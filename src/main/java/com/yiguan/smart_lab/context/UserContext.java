@@ -1,0 +1,17 @@
+package com.yiguan.smart_lab.context;
+
+public class UserContext {
+
+    public static final ThreadLocal<Long> USER_THREAD_LOCAL = new ThreadLocal<>();
+
+    public static void setUserId(Long userId){
+        USER_THREAD_LOCAL.set(userId);
+    }
+    public static Long getUserId(){
+        return USER_THREAD_LOCAL.get();
+    }
+
+    public static void clear(){
+        USER_THREAD_LOCAL.remove();
+    }
+}
