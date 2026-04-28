@@ -26,4 +26,6 @@ public class LabDevice {
     private Long createBy;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
+
+    private String valueLevel;
 }

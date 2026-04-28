@@ -1,6 +1,7 @@
 package com.yiguan.smart_lab.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yiguan.smart_lab.config.RabbitMqConfig;
 import com.yiguan.smart_lab.exception.BusinessException;
 import com.yiguan.smart_lab.mapper.BorrowRecordMapper;
 import com.yiguan.smart_lab.mapper.LabDeviceMapper;
@@ -19,17 +20,20 @@ public class LabDeviceServiceImpl implements LabDeviceService {
     private final ObjectMapper objectMapper;
     private final BorrowRecordMapper borrowRecordMapper;
     private final org.redisson.api.RedissonClient redissonClient;
+    private final org.springframework.amqp.rabbit.core.RabbitTemplate rabbitTemplate;
 
     public LabDeviceServiceImpl (LabDeviceMapper labDeviceMapper,
                                  RedisTemplate<String, Object> redisTemplate,
                                  ObjectMapper objectMapper,
                                  BorrowRecordMapper borrowRecordMapper,
-                                 org.redisson.api.RedissonClient redissonClient){
+                                 org.redisson.api.RedissonClient redissonClient,
+                                 org.springframework.amqp.rabbit.core.RabbitTemplate rabbitTemplate){
         this.labDeviceMapper = labDeviceMapper;
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
         this.borrowRecordMapper = borrowRecordMapper;
         this.redissonClient = redissonClient;
+        this.rabbitTemplate = rabbitTemplate;
     }
 
     @Override
@@ -111,6 +115,18 @@ public class LabDeviceServiceImpl implements LabDeviceService {
             record.setBorrowTime(java.time.LocalDateTime.now());
             record.setRemark("用户借用设备");
             borrowRecordMapper.insert(record);
+            com.yiguan.smart_lab.dto.BorrowTimeoutMessage message =
+                    new com.yiguan.smart_lab.dto.BorrowTimeoutMessage(record.getId(), deviceId);
+
+            rabbitTemplate.convertAndSend(
+                    RabbitMqConfig.BORROW_EXCHANGE,
+                    RabbitMqConfig.BORROW_ROUTING_KEY,
+                    message,
+                    msg ->{
+                        msg.getMessageProperties().setExpiration("30000");
+                        return msg;
+                    }
+            );
 
             //3.删除缓存，保证一致性
             String cacheKey = "lab_device:" + deviceId;
