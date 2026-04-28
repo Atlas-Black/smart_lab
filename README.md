@@ -107,3 +107,57 @@ src/main/java/com/yiguan/smart_lab
 ├── strategy        // 策略模式实现类
 ├── utils           // 工具类（JWT等）
 └── vo              // 返回对象
+
+## 如何解决超卖问题（Redisson）
+
+### 问题背景
+在实验室设备借用场景中，如果多个用户同时请求借用同一台设备，可能都会先查询到设备状态为“可借用”，从而导致同一台设备被重复借出，也就是典型的超卖问题。
+
+### 解决思路
+本项目采用 **Redisson 分布式锁 + 状态二次校验** 的方式解决该问题：
+
+1. 根据设备 ID 获取分布式锁  
+2. 成功加锁后进入临界区  
+3. 再次查询设备当前状态  
+4. 只有状态为“可借用”时才允许借用  
+5. 更新设备状态为“已借出”  
+6. 写入借用流水 `borrow_record`  
+7. 删除 Redis 缓存，保证缓存一致性  
+8. 在 `finally` 中释放锁，避免死锁
+
+### 关键代码思路
+```java
+RLock lock = redissonClient.getLock("lock:lab_device:" + deviceId);
+
+boolean locked = false;
+try {
+    locked = lock.tryLock();
+    if (!locked) {
+        throw new BusinessException("当前设备借用人数过多，请稍后再试");
+    }
+
+    LabDevice device = labDeviceMapper.selectById(deviceId);
+    if (device == null) {
+        throw new BusinessException("设备不存在");
+    }
+
+    if (device.getStatus() == null || device.getStatus() != 0) {
+        throw new BusinessException("该设备当前不可借用");
+    }
+
+    device.setStatus(2);
+    labDeviceMapper.updateById(device);
+
+    BorrowRecord record = new BorrowRecord();
+    record.setUserId(UserContext.getUserId());
+    record.setDeviceId(deviceId);
+    record.setBorrowStatus(1);
+    borrowRecordMapper.insert(record);
+
+    redisTemplate.delete("lab_device:" + deviceId);
+
+} finally {
+    if (locked && lock.isHeldByCurrentThread()) {
+        lock.unlock();
+    }
+}
