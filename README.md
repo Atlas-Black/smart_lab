@@ -107,10 +107,10 @@ src/main/java/com/yiguan/smart_lab
 ├── strategy        // 策略模式实现类
 ├── utils           // 工具类（JWT等）
 └── vo              // 返回对象
-
-‘’‘text
+```
 
 ---
+
 ## 如何解决超卖问题（Redisson）
 
 ### 问题背景
@@ -164,3 +164,52 @@ try {
         lock.unlock();
     }
 }
+
+```
+
+## 基于 RabbitMQ 死信队列的超时订单处理方案
+
+### 业务背景
+在实验室设备预约场景中，学生完成预约后，如果长时间未到现场扫码取用，设备会一直处于占用状态。  
+传统做法通常采用 `@Scheduled` 定时扫表，但这种方式存在以下问题：
+
+- 需要频繁扫描数据库，效率低
+- 数据量增大后对数据库压力较大
+- 处理时机不够精确
+- 业务耦合度高，不利于扩展
+
+### 解决方案
+本项目采用 **RabbitMQ TTL + 死信队列** 的方式实现“超时未取用自动取消”。
+
+核心思路如下：
+
+1. 用户借用设备成功后，系统生成一条借用流水 `borrow_record`
+2. 同时向 RabbitMQ 发送一条带过期时间（TTL）的消息
+3. 消息在正常队列中等待
+4. TTL 到期后，消息转入死信交换机，再路由到死信队列
+5. 死信消费者收到消息后，查询对应借用记录
+6. 如果该记录仍处于“未确认取用”状态，则自动执行取消逻辑：
+   - 将借用记录状态改为“已取消”
+   - 将设备状态恢复为“可借用”
+
+### 队列设计
+- 正常交换机：`borrow.exchange`
+- 延迟队列：`borrow.delay.queue`
+- 死信交换机：`borrow.dlx.exchange`
+- 死信队列：`borrow.dlx.queue`
+
+### 关键代码思路
+
+发送延迟消息：
+```java
+BorrowTimeoutMessage message = new BorrowTimeoutMessage(record.getId(), deviceId);
+
+rabbitTemplate.convertAndSend(
+        RabbitMqConfig.BORROW_EXCHANGE,
+        RabbitMqConfig.BORROW_ROUTING_KEY,
+        message,
+        msg -> {
+            msg.getMessageProperties().setExpiration("30000");
+            return msg;
+        }
+);
